@@ -47,6 +47,7 @@ jobs:
           docker run --rm \
             --volume /home/doav/dev/auth-ldap:/src \
             --volume /home/doav/dev/.cache/pnpm:/root/.local/share/pnpm/store \
+            -e HTTPS_PROXY -e HTTP_PROXY -e https_proxy -e http_proxy \
             -w /src/apps/web \
             node:26.12.0-alpine \
             sh -c "npm install -g pnpm@12.18.0 >/dev/null 2>&1 \
