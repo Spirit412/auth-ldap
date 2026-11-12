@@ -26,9 +26,13 @@ def load_env(path=".env"):
             os.environ.setdefault(k, v)
 
 
+# Прокси job-контейнера (HTTP(S)_PROXY) не знает docker-имён — ходим напрямую.
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def get(path, headers=None):
     req = urllib.request.Request(BASE + path, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with _opener.open(req, timeout=15) as r:
         return r.status, r.read().decode()
 
 
@@ -38,7 +42,7 @@ def post(path, body, headers=None):
     req = urllib.request.Request(BASE + path, data=json.dumps(body).encode(),
                                  headers=h, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with _opener.open(req, timeout=15) as r:
             return r.status, json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read().decode())
