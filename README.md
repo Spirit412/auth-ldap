@@ -99,7 +99,7 @@ golang-migrate), Redis (refresh-сессии + rate limiting GCRA).
 - **OpenAPI 3.1 генерируется из Go-кода** (huma), TS-типы и клиент — из спеки
   (@hey-api/openapi-ts); CI проверяет рассинхрон (anti-drift).
 - **Same-origin**: SPA и API за одним nginx, CORS выключен.
-
+  
 ## URL и порты
 
 | Что                  | Адрес                                         |
