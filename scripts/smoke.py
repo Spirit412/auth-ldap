@@ -71,7 +71,7 @@ def main():
     st, _ = get("/health");  assert st == 200, "health"
     st, _ = get("/ready");   assert st == 200, "ready"
     st, jwks = get("/.well-known/jwks.json")
-    assert st == 200 and '"kid"' in jwks, "JWKS"
+    assert st == 200 and jwks.get("keys") and jwks["keys"][0].get("kid"), "JWKS"
 
     st, tok = post("/api/v1/auth/login", {"username": user, "password": pwd})
     assert st == 200 and tok.get("access_token"), f"login: {st}"
