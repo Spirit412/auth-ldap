@@ -1,0 +1,78 @@
+name: CI/CD
+
+# Пайплайн в конвенции этого runner'а (см. unipulse): job работает в
+# рабочем каталоге хоста /home/doav/dev/auth-ldap (примонтирован в job-
+# контейнер по тому же пути) и деплоит через docker compose хост-демона.
+# uses-экшены (actions/checkout, setup-go, pnpm/action-setup) не используются:
+# на этом инстансе Forgejo они не резолвятся (DEFAULT_ACTIONS_URL=self,
+# локальных зеркал actions/* нет).
+#
+# Go-инструменты: локальный образ golang:1.27.3-alpine (зависимости vendored).
+# Node-инструменты: локальный образ node:26.12.0-alpine, pnpm ставится через
+# npm (registry доступен через HTTP_PROXY, заданный в options runner'а).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOCKER_BUILDKIT: "1"
+
+jobs:
+  deploy:
+    name: Проверки и деплой на DEV
+    runs-on: docker
+    steps:
+      - name: Обновить код в рабочем каталоге сервера
+        run: |
+          git config --global --add safe.directory /home/doav/dev/auth-ldap
+          cd /home/doav/dev/auth-ldap
+          git fetch origin main
+          git merge --ff-only origin/main
+          git log --oneline -1
+
+      - name: API — vet + unit-тесты (golang, vendored)
+        run: |
+          cd /home/doav/dev/auth-ldap
+          docker run --rm \
+            --volume /home/doav/dev/auth-ldap/apps/api:/src \
+            -w /src \
+            golang:1.27.3-alpine \
+            sh -c "go vet ./... && go test ./... -count=1"
+
+      - name: Web — install + generate types + tsc + vitest + build
+        run: |
+          cd /home/doav/dev/auth-ldap
+          docker run --rm \
+            --volume /home/doav/dev/auth-ldap:/src \
+            --volume /home/doav/dev/.cache/pnpm:/root/.local/share/pnpm/store \
+            -w /src/apps/web \
+            node:26.12.0-alpine \
+            sh -c "npm install -g pnpm@12.18.0 >/dev/null 2>&1 \
+              && pnpm install --no-frozen-lockfile \
+              && pnpm --filter @aps/shared-types generate \
+              && pnpm --filter @aps/web lint \
+              && pnpm --filter @aps/web test \
+              && pnpm --filter @aps/web build"
+
+      - name: Проверить отсутствие дрейфа OpenAPI
+        run: |
+          cd /home/doav/dev/auth-ldap
+          docker run --rm \
+            --volume /home/doav/dev/auth-ldap:/src \
+            -w /src/apps/api \
+            golang:1.27.3-alpine \
+            sh -c "go run ./cmd/openapi -out /tmp/openapi.yaml \
+              && diff -u /tmp/openapi.yaml ../../packages/shared-types/openapi.yaml"
+
+      - name: Деплой (docker compose build + up)
+        run: |
+          cd /home/doav/dev/auth-ldap
+          test -f .env || { echo "::error::Нет .env на сервере"; exit 1; }
+          docker compose up -d --build auth-ldap-api auth-ldap-web
+
+      - name: Smoke — health/ready/JWKS/логин/профиль
+        run: |
+          cd /home/doav/dev/auth-ldap
+          python3 scripts/smoke.py http://auth-ldap-web:80
