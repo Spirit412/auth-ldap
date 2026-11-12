@@ -1,0 +1,6 @@
+packages:
+  - apps/web
+  - packages/shared-types
+minimumReleaseAgeExclude:
+  - '@hookform/resolvers@7.0.6'
+  - react-hook-form@7.92.0

@@ -1,0 +1,19 @@
+{
+  "name": "@aps/shared-types",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/gen/client"
+  },
+  "scripts": {
+    "generate": "openapi-ts -f openapi-ts.config.ts"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0"
+  },
+  "dependencies": {
+    "@hey-api/client-fetch": "0.13.1"
+  }
+}

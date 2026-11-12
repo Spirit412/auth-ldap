@@ -1,0 +1,26 @@
+# secrets
+.env
+deploy/keys/
+deploy/glauth/*.crt
+deploy/glauth/*.key
+*.pem
+
+# dependencies / build
+node_modules/
+apps/web/dist/
+apps/api/bin/
+packages/shared-types/src/gen/
+pnpm-lock.yaml.bak
+
+# go
+*.exe
+*.test
+coverage.out
+
+# misc
+*.log
+.DS_Store
+Thumbs.db
+playwright-report/
+test-results/
+openapi-ts-error-*.log

@@ -1,0 +1,57 @@
+# APS deployment.
+#
+# External infrastructure (user request: use EXISTING containers):
+#   - redis      -> existing container `redis` on the `proxy` network (password in .env)
+#   - postgresql -> existing container `postgresql_18` (alias `postgres`) on `proxy`
+# This compose only adds the APS application containers; glauth (mock AD)
+# starts only with the "dev" profile.
+name: auth-ldap
+
+services:
+  api:
+    build:
+      context: ./apps/api
+      args:
+        VERSION: ${APS_VERSION:-1.0.0}
+    image: aps-api:local
+    container_name: aps-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LISTEN_ADDR: ":8080"
+      # Inside the compose network we talk to the nginx-less API directly:
+      # the web container is the trusted proxy in front of it.
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-172.16.0.0/12,127.0.0.1}"
+    extra_hosts:
+      - "s0005.unicont.spb:10.26.10.5"   # контроллер домена (стенд, без DNS-записи)
+    volumes:
+      - ./deploy/keys:/keys:ro
+    networks: [proxy]
+    depends_on: []
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: aps-web:local
+    container_name: aps-web
+    restart: unless-stopped
+    ports:
+      - "8006:80"   # external port for the whole stack (SPA + same-origin /api)
+    networks: [proxy]
+    depends_on:
+      - api
+
+  # Mock AD — dev/integration only: docker compose --profile dev up
+  glauth:
+    image: glauth/glauth:v2.5.4
+    container_name: aps-glauth
+    profiles: ["dev"]
+    command: ["-c", "/config/glauth.cfg"]
+    volumes:
+      - ./deploy/glauth:/config:ro
+    networks: [proxy]
+
+networks:
+  proxy:
+    external: true

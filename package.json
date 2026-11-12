@@ -1,0 +1,13 @@
+{
+  "name": "aps-monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @aps/web dev",
+    "build": "pnpm --filter @aps/shared-types generate && pnpm --filter @aps/web build",
+    "test": "pnpm --filter @aps/web test",
+    "lint": "pnpm --filter @aps/web lint"
+  },
+  "engines": {
+    "node": ">=26"
+  }
+}
