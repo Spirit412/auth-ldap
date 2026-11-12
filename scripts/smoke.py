@@ -33,7 +33,11 @@ _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 def get(path, headers=None):
     req = urllib.request.Request(BASE + path, headers=headers or {})
     with _opener.open(req, timeout=15) as r:
-        return r.status, r.read().decode()
+        raw = r.read().decode()
+        try:
+            return r.status, json.loads(raw)
+        except json.JSONDecodeError:
+            return r.status, raw
 
 
 def post(path, body, headers=None):
