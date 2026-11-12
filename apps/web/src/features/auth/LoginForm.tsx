@@ -1,5 +1,5 @@
 import { Button, Form, Input, App as AntApp } from 'antd';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useState } from 'react';
@@ -7,7 +7,9 @@ import { login, toAuthUser, fetchMe } from '../../services/auth';
 import { useAuthStore } from '../../stores/auth';
 import { ApiError } from '../../lib/api';
 
-// F-14: React Hook Form + Zod; AntD renders the fields.
+// F-14: React Hook Form + Zod; AntD renders the fields. AntD Input's ref is
+// not a DOM input element, so plain register() loses values — Controller
+// wires value/onChange explicitly instead.
 const schema = z.object({
   username: z.string().min(1, 'Введите имя пользователя').max(128),
   password: z.string().min(1, 'Введите пароль').max(256),
@@ -15,7 +17,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export function LoginForm({ onSuccess }: { onSuccess: () => void }) {
-  const { register, handleSubmit, formState } = useForm<FormValues>({
+  const { control, handleSubmit, formState } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { username: '', password: '' },
   });
@@ -52,10 +54,22 @@ export function LoginForm({ onSuccess }: { onSuccess: () => void }) {
     <form onSubmit={onSubmit} noValidate>
       <Form layout="vertical" component="div">
         <Form.Item label="Имя пользователя" validateStatus={formState.errors.username ? 'error' : ''} help={formState.errors.username?.message}>
-          <Input autoComplete="username" autoFocus {...register('username')} />
+          <Controller
+            control={control}
+            name="username"
+            render={({ field }) => (
+              <Input autoComplete="username" autoFocus {...field} />
+            )}
+          />
         </Form.Item>
         <Form.Item label="Пароль" validateStatus={formState.errors.password ? 'error' : ''} help={formState.errors.password?.message}>
-          <Input.Password autoComplete="current-password" {...register('password')} />
+          <Controller
+            control={control}
+            name="password"
+            render={({ field }) => (
+              <Input.Password autoComplete="current-password" {...field} />
+            )}
+          />
         </Form.Item>
         {error && (
           <Form.Item>
