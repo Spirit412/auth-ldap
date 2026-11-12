@@ -82,8 +82,11 @@ type UserStore interface {
 	UpsertFromLogin(ctx context.Context, u *ldap.User) (*userstore.User, error)
 	GetActiveByUsername(ctx context.Context, username string) (*userstore.User, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*userstore.User, error)
+	GetByIDAny(ctx context.Context, id uuid.UUID) (*userstore.User, error)
 	List(ctx context.Context, f userstore.ListFilter) ([]userstore.User, string, error)
 	SoftDelete(ctx context.Context, id uuid.UUID) error
+	Restore(ctx context.Context, id uuid.UUID) error
+	UpdateProfile(ctx context.Context, id uuid.UUID, displayName, email string) error
 	Ping(ctx context.Context) error
 }
 
@@ -412,6 +415,57 @@ func (s *Service) Me(ctx context.Context, claims *AccessClaims) (*userstore.User
 	return u, nil
 }
 
+// UserByIDAny returns a profile regardless of deletion status (admin view).
+func (s *Service) UserByIDAny(ctx context.Context, id uuid.UUID) (*userstore.User, error) {
+	u, err := s.users.GetByIDAny(ctx, id)
+	if err == userstore.ErrNotFound {
+		return nil, ErrNotFound("user not found")
+	}
+	if err != nil {
+		return nil, ErrUnavailable()
+	}
+	return u, nil
+}
+
+// UpdateUserProfile edits the locally cached display_name/email (admin).
+// AD overwrites both at the next login of that user.
+func (s *Service) UpdateUserProfile(ctx context.Context, actor string, id uuid.UUID, displayName, email string) (*userstore.User, error) {
+	if _, err := s.users.GetByID(ctx, id); err != nil {
+		if err == userstore.ErrNotFound {
+			return nil, ErrNotFound("user not found")
+		}
+		return nil, ErrUnavailable()
+	}
+	if err := s.users.UpdateProfile(ctx, id, displayName, email); err != nil {
+		return nil, ErrUnavailable()
+	}
+	u, err := s.users.GetByID(ctx, id)
+	if err != nil {
+		return nil, ErrUnavailable()
+	}
+	event(ctx, "user_profile_updated", actor, u.Username, "success")
+	return u, nil
+}
+
+// RestoreUser re-activates a soft-deleted profile (admin).
+func (s *Service) RestoreUser(ctx context.Context, actor string, id uuid.UUID) (*userstore.User, error) {
+	if _, err := s.users.GetByIDAny(ctx, id); err != nil {
+		if err == userstore.ErrNotFound {
+			return nil, ErrNotFound("user not found")
+		}
+		return nil, ErrUnavailable()
+	}
+	if err := s.users.Restore(ctx, id); err != nil {
+		return nil, ErrUnavailable()
+	}
+	u, err := s.users.GetByID(ctx, id)
+	if err != nil {
+		return nil, ErrUnavailable()
+	}
+	event(ctx, "user_restored", actor, u.Username, "success")
+	return u, nil
+}
+
 // Users lists cached profiles with filtering (admin).
 func (s *Service) Users(ctx context.Context, f userstore.ListFilter) ([]userstore.User, string, error) {
 	users, next, err := s.users.List(ctx, f)
@@ -469,6 +523,16 @@ func (s *Service) RevokeSession(ctx context.Context, actor string, familyID stri
 	}
 	s.audit.SessionRevoked(ctx, actor, target, familyID, result)
 	return err
+}
+
+// event writes a simple admin audit line on the request-scoped logger.
+func event(ctx context.Context, name, actor, target, result string) {
+	zerolog.Ctx(ctx).Info().
+		Str("event", name).
+		Str("actor", actor).
+		Str("target", target).
+		Str("result", result).
+		Msg("admin action")
 }
 
 // Ready verifies all backend dependencies (LDAP, Redis, PostgreSQL) —

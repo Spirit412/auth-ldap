@@ -106,6 +106,13 @@ func (f *fakeUserStore) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	f.deleted = true
 	return nil
 }
+func (f *fakeUserStore) GetByIDAny(ctx context.Context, id uuid.UUID) (*userstore.User, error) {
+	return nil, userstore.ErrNotFound
+}
+func (f *fakeUserStore) Restore(ctx context.Context, id uuid.UUID) error { return nil }
+func (f *fakeUserStore) UpdateProfile(ctx context.Context, id uuid.UUID, displayName, email string) error {
+	return nil
+}
 func (f *fakeUserStore) Ping(ctx context.Context) error { return nil }
 
 func newTestKeystore() (*jwks.Keystore, error) {

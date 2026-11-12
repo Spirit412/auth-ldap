@@ -156,6 +156,48 @@ func (s *Store) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	return &u, nil
 }
 
+// GetByIDAny returns the profile by primary key regardless of deletion
+// status (admin detail view shows archived rows too).
+func (s *Store) GetByIDAny(ctx context.Context, id uuid.UUID) (*User, error) {
+	var u User
+	err := s.db.WithContext(ctx).Unscoped().Where("id = ?", id).First(&u).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// UpdateProfile edits display_name and email in the local cache. AD remains
+// the source of truth: both fields are overwritten at the next login.
+func (s *Store) UpdateProfile(ctx context.Context, id uuid.UUID, displayName, email string) error {
+	res := s.db.WithContext(ctx).Model(&User{}).Where("id = ? AND deleted_at IS NULL", id).
+		Updates(map[string]any{"display_name": displayName, "email": email, "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Restore re-activates a soft-deleted profile (deleted_at = NULL).
+func (s *Store) Restore(ctx context.Context, id uuid.UUID) error {
+	res := s.db.WithContext(ctx).Unscoped().Model(&User{}).
+		Where("id = ? AND deleted_at IS NOT NULL", id).
+		Updates(map[string]any{"deleted_at": nil, "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListFilter narrows the admin listing (GET /users).
 type ListFilter struct {
 	Query  string // substring across username / display_name / email

@@ -194,11 +194,85 @@ func registerAdmin(api huma.API, d Deps) {
 		if err != nil {
 			return nil, fail(ctx, auth.ErrBadRequest("invalid user id"))
 		}
-		u, err := d.Svc.UserByID(ctx, id)
+		u, err := d.Svc.UserByIDAny(ctx, id)
 		if err != nil {
 			return nil, fail(ctx, err)
 		}
 		return &userOutput{Body: *u}, nil
+	})
+
+	type updateUserInput struct {
+		Authorization string `header:"Authorization" required:"true"`
+		ID            string `path:"id" format:"uuid"`
+		Body          struct {
+			DisplayName string `json:"display_name" maxLength:"512" doc:"новое отображаемое имя (локальная правка; AD перезапишет при следующем входе)"`
+			Email       string `json:"email" maxLength:"512" format:"email" doc:"новый email (локальная правка; AD перезапишет при следующем входе)"`
+		}
+	}
+	type updateUserOutput struct {
+		Body userstore.User
+	}
+	type restoreUserInput struct {
+		Authorization string `header:"Authorization" required:"true"`
+		ID            string `path:"id" format:"uuid"`
+	}
+	type restoreUserOutput struct {
+		Body userstore.User
+	}
+
+	huma.Register(api, huma.Operation{
+		OperationID: "updateUser",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/users/{id}",
+		Summary:     "Локальная правка display_name / email профиля (admin)",
+		Description: "Правится кэш в PostgreSQL; при следующем входе пользователя поля будут перезаписаны значениями из AD.",
+		Security:    bearerSecurity,
+		Tags:        []string{"users"},
+		Errors:      []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable},
+	}, func(ctx context.Context, in *updateUserInput) (*updateUserOutput, error) {
+		claims, err := bearerClaims(ctx, d, in.Authorization)
+		if err != nil {
+			return nil, fail(ctx, err)
+		}
+		if err := requireAdmin(claims); err != nil {
+			return nil, fail(ctx, err)
+		}
+		id, err := uuid.Parse(in.ID)
+		if err != nil {
+			return nil, fail(ctx, auth.ErrBadRequest("invalid user id"))
+		}
+		u, err := d.Svc.UpdateUserProfile(ctx, claims.Subject, id, in.Body.DisplayName, in.Body.Email)
+		if err != nil {
+			return nil, fail(ctx, err)
+		}
+		return &updateUserOutput{Body: *u}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "restoreUser",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/users/{id}/restore",
+		Summary:     "Восстановить soft-deleted профиль (admin)",
+		Security:    bearerSecurity,
+		Tags:        []string{"users"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable},
+	}, func(ctx context.Context, in *restoreUserInput) (*restoreUserOutput, error) {
+		claims, err := bearerClaims(ctx, d, in.Authorization)
+		if err != nil {
+			return nil, fail(ctx, err)
+		}
+		if err := requireAdmin(claims); err != nil {
+			return nil, fail(ctx, err)
+		}
+		id, err := uuid.Parse(in.ID)
+		if err != nil {
+			return nil, fail(ctx, auth.ErrBadRequest("invalid user id"))
+		}
+		u, err := d.Svc.RestoreUser(ctx, claims.Subject, id)
+		if err != nil {
+			return nil, fail(ctx, err)
+		}
+		return &restoreUserOutput{Body: *u}, nil
 	})
 
 	huma.Register(api, huma.Operation{

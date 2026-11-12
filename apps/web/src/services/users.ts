@@ -1,4 +1,4 @@
-import { get, del } from '../lib/api';
+import { get, del, post, apiFetch } from '../lib/api';
 import type { User, UsersOutputBody } from '@aps/shared-types';
 
 export interface UsersQuery {
@@ -22,4 +22,19 @@ export async function listUsers(q: UsersQuery): Promise<UsersOutputBody> {
 
 export const getUser = (id: string) => get<User>(`/users/${encodeURIComponent(id)}`);
 export const deleteUser = (id: string) => del<void>(`/users/${encodeURIComponent(id)}`);
+export const restoreUser = (id: string) => post<User>(`/users/${encodeURIComponent(id)}/restore`);
+
+export interface UpdateProfileBody {
+  display_name: string;
+  email: string;
+}
+
+/** PATCH /users/{id} — локальная правка кэша (AD перезапишет при следующем входе). */
+export const updateUser = (id: string, body: UpdateProfileBody) =>
+  apiFetch<User>(`/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
 export type { User };
