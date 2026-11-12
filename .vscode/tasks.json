@@ -1,0 +1,54 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "APS: vite dev server",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["dev"],
+      "options": {
+        "cwd": "${workspaceFolder}/apps/web"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*VITE.*ready|Local:",
+          "endsPattern": "^.*Local:.*http://localhost:5173"
+        }
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "APS: go test",
+      "type": "shell",
+      "command": "go",
+      "args": ["test", "./..."],
+      "options": {
+        "cwd": "${workspaceFolder}/apps/api"
+      },
+      "group": "test",
+      "problemMatcher": "$go"
+    },
+    {
+      "label": "APS: openapi + types",
+      "type": "shell",
+      "command": "make",
+      "args": ["generate-types"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${env:PATH};C:\\Program Files\\Git\\bin"
+        }
+      },
+      "problemMatcher": []
+    }
+  ]
+}

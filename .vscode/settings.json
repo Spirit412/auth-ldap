@@ -1,0 +1,13 @@
+{
+  "go.testEnvFile": "${workspaceFolder}/.env.test",
+  "go.testFlags": ["-count=1"],
+  "editor.formatOnSave": true,
+  "[go]": {
+    "editor.defaultFormatter": "golang.go"
+  },
+  "files.watcherExclude": {
+    "**/apps/api/vendor/**": true,
+    "**/node_modules/**": true,
+    "**/apps/web/dist/**": true
+  }
+}

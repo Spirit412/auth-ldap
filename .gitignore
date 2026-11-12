@@ -24,3 +24,6 @@ Thumbs.db
 playwright-report/
 test-results/
 openapi-ts-error-*.log
+
+# локальные параметры дебага
+.env.test

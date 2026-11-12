@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "APS API (Go delve)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/apps/api/cmd/api",
+      "cwd": "${workspaceFolder}/apps/api",
+      "envFile": "${workspaceFolder}/.env.test",
+      "env": {
+        "LISTEN_ADDR": ":8080"
+      }
+    },
+    {
+      "name": "APS Web (Chrome, vite dev)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/apps/web/src",
+      "preLaunchTask": "APS: vite dev server",
+      "runtimeArgs": ["--new-window", "--user-data-dir=${env:TEMP}/aps-chrome-debug"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "APS Full Stack (API + Web)",
+      "configurations": ["APS API (Go delve)", "APS Web (Chrome, vite dev)"],
+      "stopAll": true
+    }
+  ]
+}
