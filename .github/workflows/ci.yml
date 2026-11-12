@@ -15,7 +15,7 @@ jobs:
           go-version: "1.27"
       - name: Format check
         working-directory: apps/api
-        run: test -z "$(gofmt -l . )" || (gofmt -l . && exit 1)
+        run: test -z "$(gofmt -l . | grep -v vendor)" || (gofmt -l . | grep -v vendor && exit 1)
       - name: Vet
         working-directory: apps/api
         run: go vet ./...
@@ -68,12 +68,6 @@ jobs:
           POSTGRES_DB: aps
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-retries 10
-      glauth:
-        image: glauth/glauth:v2.5.4
-        ports: ["6360:636"]
-        volumes:
-          - ${{ github.workspace }}/deploy/glauth:/config:ro
-        # image default CMD runs `glauth -c /config/glauth.cfg`
     env:
       APS_IT_LDAP_URL: ldaps://localhost:6360
       APS_IT_LDAP_INSECURE: "true"

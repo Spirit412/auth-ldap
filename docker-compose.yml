@@ -3,18 +3,19 @@
 # External infrastructure (user request: use EXISTING containers):
 #   - redis      -> existing container `redis` on the `proxy` network (password in .env)
 #   - postgresql -> existing container `postgresql_18` (alias `postgres`) on `proxy`
-# This compose only adds the APS application containers; glauth (mock AD)
-# starts only with the "dev" profile.
+# This compose only adds the APS application containers. Authentication
+# goes against the REAL Active Directory (s0005.unicont.spb, LDAPS 636,
+# self-bind mode: no service account needed).
 name: auth-ldap
 
 services:
-  api:
+  auth-ldap-api:
     build:
       context: ./apps/api
       args:
         VERSION: ${APS_VERSION:-1.0.0}
-    image: aps-api:local
-    container_name: aps-api
+    image: auth-ldap-api:local
+    container_name: auth-ldap-api
     restart: unless-stopped
     env_file: .env
     environment:
@@ -26,31 +27,37 @@ services:
       - "s0005.unicont.spb:10.26.10.5"   # контроллер домена (стенд, без DNS-записи)
     volumes:
       - ./deploy/keys:/keys:ro
+      - aps-logs:/var/log/aps   # файловые логи состояния (ротация 3 дня)
     networks: [proxy]
-    depends_on: []
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
 
-  web:
+  # Одноразовая подготовка тома логов: контейнер APS работает под uid 10001,
+  # а docker создаёт тома от root — даём право записи.
+  log-init:
+    image: alpine:3.22
+    command: ["sh", "-c", "mkdir -p /data && chown -R 10001:10001 /data"]
+    volumes:
+      - aps-logs:/data
+    restart: "no"
+    networks: []
+
+  auth-ldap-web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    image: aps-web:local
-    container_name: aps-web
+    image: auth-ldap-web:local
+    container_name: auth-ldap-web
     restart: unless-stopped
     ports:
       - "8006:80"   # external port for the whole stack (SPA + same-origin /api)
     networks: [proxy]
     depends_on:
-      - api
+      - auth-ldap-api
 
-  # Mock AD — dev/integration only: docker compose --profile dev up
-  glauth:
-    image: glauth/glauth:v2.5.4
-    container_name: aps-glauth
-    profiles: ["dev"]
-    command: ["-c", "/config/glauth.cfg"]
-    volumes:
-      - ./deploy/glauth:/config:ro
-    networks: [proxy]
+volumes:
+  aps-logs:
 
 networks:
   proxy:

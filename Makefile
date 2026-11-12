@@ -1,13 +1,12 @@
 # APS monorepo — unified commands.
 SHELL := /bin/bash
 
-.PHONY: help keys certs dev up down logs build test lint openapi generate-types migrate smoke e2e
+.PHONY: help keys dev up down logs build test lint openapi generate-types migrate smoke e2e
 
 help:
 	@echo "make keys            — generate JWT signing key + kid into deploy/keys"
-	@echo "make certs           — generate self-signed cert for mock LDAP (glauth)"
-	@echo "make dev             — build & start the full stack (incl. mock AD) on :8006"
-	@echo "make up / down       — start/stop without the dev profile"
+	@echo "make dev             — build & start the full stack on :8006"
+	@echo "make up / down       — start/stop the stack"
 	@echo "make logs            — tail api+web logs"
 	@echo "make test            — go unit tests + web vitest"
 	@echo "make lint            — go vet/fmt check + web tsc"
@@ -24,24 +23,18 @@ keys:
 	@bash -c 'test -f deploy/keys/kid || openssl rand -hex 4 > deploy/keys/kid'
 	@echo "JWT key ready; kid = $$(cat deploy/keys/kid)"
 
-certs:
-	@mkdir -p deploy/glauth
-	@test -f deploy/glauth/glauth.crt || MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 \
-		-keyout deploy/glauth/glauth.key -out deploy/glauth/glauth.crt -days 3650 -nodes -subj "/CN=glauth"
-	@echo "glauth TLS cert ready"
-
-dev: keys certs
-	docker compose --profile dev up --build -d
-	@echo "APS: http://localhost:8006 (alice/alice_password — admin, bob/bob_password — user)"
+dev: keys
+	docker compose up --build -d
+	@echo "APS: http://localhost:8006 — вход по доменной учётной записи AD"
 
 up:
 	docker compose up --build -d
 
 down:
-	docker compose --profile dev down
+	docker compose down
 
 logs:
-	docker compose logs -f api web
+	docker compose logs -f auth-ldap-api auth-ldap-web
 
 build:
 	cd apps/api && go build ./...
@@ -52,7 +45,7 @@ test:
 	cd apps/web && pnpm test
 
 lint:
-	cd apps/api && go vet ./... && test -z "$$(gofmt -l . | grep -v _gen)" || (gofmt -l .; exit 1)
+	cd apps/api && go vet ./... && test -z "$$(gofmt -l . | grep -v vendor)" || (gofmt -l . | grep -v vendor; exit 1)
 	cd apps/web && pnpm lint
 
 openapi:

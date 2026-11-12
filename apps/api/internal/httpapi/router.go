@@ -17,6 +17,7 @@ import (
 
 	"aps.local/apps/api/internal/auth"
 	"aps.local/apps/api/internal/jwks"
+	"aps.local/apps/api/internal/ldap"
 	"aps.local/apps/api/internal/metrics"
 	"aps.local/apps/api/internal/middleware"
 )
@@ -31,6 +32,7 @@ type CookieCfg struct {
 // Deps are all collaborators the router needs.
 type Deps struct {
 	Svc     *auth.Service
+	LDAP    *ldap.Client
 	Keys    *jwks.Keystore
 	Logger  zerolog.Logger
 	Met     *metrics.Metrics
@@ -38,6 +40,7 @@ type Deps struct {
 	Cookie  CookieCfg
 	Docs    bool // expose /docs + /openapi.json (F-13, DOCS_ENABLED)
 	Version string
+	LogDir  string // admin log files dir; empty = file logging disabled
 }
 
 // NewRouter builds the full HTTP handler. The second return exposes the
@@ -76,6 +79,8 @@ func NewRouter(d Deps) (http.Handler, huma.API) {
 	registerAuth(api, d)
 	registerAdmin(api, d)
 	registerPublic(api, d)
+	registerLogs(api, d)
+	registerLDAP(api, d)
 
 	// Prometheus scrape endpoint (F-09) — chi-level, not in the OpenAPI spec.
 	r.Method(http.MethodGet, "/metrics", promhttp.Handler())

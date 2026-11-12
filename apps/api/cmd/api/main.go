@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
+
+	"aps.local/apps/api/internal/logstore"
 
 	"aps.local/apps/api/internal/audit"
 	"aps.local/apps/api/internal/auth"
@@ -41,7 +44,29 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	logger := newLogger(cfg)
+	baseLogger := newLogger(cfg)
+	var logFile *logstore.DailyWriter
+	if cfg.LogFileDir != "" {
+		var err error
+		logFile, err = logstore.NewDailyWriter(cfg.LogFileDir)
+		if err != nil {
+			return fmt.Errorf("log file: %w", err)
+		}
+		defer logFile.Close()
+		baseLogger = baseLogger.Output(io.MultiWriter(os.Stderr, logFile))
+		logstore.StartRetention(context.Background(), cfg.LogFileDir, cfg.LogRetentionDays,
+			func(removed []string, err error) {
+				ev := baseLogger.Info().Str("component", "logstore").Int("retention_days", cfg.LogRetentionDays)
+				if err != nil {
+					ev.Err(err).Msg("log retention sweep failed")
+					return
+				}
+				if len(removed) > 0 {
+					ev.Strs("removed", removed).Msg("log retention sweep removed old files")
+				}
+			})
+	}
+	logger := baseLogger
 	log := logger.With().Str("component", "main").Logger()
 	log.Info().Str("version", version).Msg("starting APS")
 
@@ -57,21 +82,23 @@ func run() error {
 		return err
 	}
 	dir, err := ldap.New(ldap.Settings{
-		URL:          cfg.LDAPURL,
-		StartTLS:     cfg.LDAPStartTLS,
-		CAFile:       cfg.LDAPCACertFile,
-		InsecureTLS:  cfg.LDAPTLSInsecure,
-		BindDN:       cfg.LDAPBindDN,
-		BindPassword: bindPassword,
-		BaseDN:       cfg.LDAPBaseDN,
-		UserAttr:     cfg.LDAPUserAttr,
-		NameAttr:     cfg.LDAPNameAttr,
-		MailAttr:     cfg.LDAPMailAttr,
-		AdminGroupDN: cfg.LDAPAdminGroupDN,
-		UPNSuffix:    cfg.LDAPUPNSuffix,
-		PoolSize:     cfg.LDAPPoolSize,
-		Timeout:      cfg.LDAPTimeout,
-		Retry:        cfg.LDAPRetry,
+		URL:           cfg.LDAPURL,
+		StartTLS:      cfg.LDAPStartTLS,
+		CAFile:        cfg.LDAPCACertFile,
+		InsecureTLS:   cfg.LDAPTLSInsecure,
+		BindDN:        cfg.LDAPBindDN,
+		BindPassword:  bindPassword,
+		BaseDN:        cfg.LDAPBaseDN,
+		ObjectClass:   cfg.LDAPObjectClass,
+		NetBIOSDomain: cfg.LDAPNetBIOSDomain,
+		UserAttr:      cfg.LDAPUserAttr,
+		NameAttr:      cfg.LDAPNameAttr,
+		MailAttr:      cfg.LDAPMailAttr,
+		AdminGroupDN:  cfg.LDAPAdminGroupDN,
+		UPNSuffix:     cfg.LDAPUPNSuffix,
+		PoolSize:      cfg.LDAPPoolSize,
+		Timeout:       cfg.LDAPTimeout,
+		Retry:         cfg.LDAPRetry,
 	})
 	if err != nil {
 		return fmt.Errorf("ldap client: %w", err)
@@ -111,11 +138,13 @@ func run() error {
 	met := metrics.New(nil)
 	aud := audit.New()
 	svc := auth.NewService(keys, dir, sessions, users, limiter, aud, met, auth.Options{
-		Issuer:       cfg.JWTIssuer,
-		Audience:     cfg.JWTAudience,
-		AdminGroupDN: cfg.LDAPAdminGroupDN,
-		AccessTTL:    cfg.AccessTokenTTL,
-		RefreshTTL:   cfg.RefreshTokenTTL,
+		Issuer:                 cfg.JWTIssuer,
+		Audience:               cfg.JWTAudience,
+		AdminGroupDN:           cfg.LDAPAdminGroupDN,
+		AdminBootstrapUser:     cfg.AdminBootstrapUser,
+		AdminBootstrapPassword: cfg.AdminBootstrapPassword,
+		AccessTTL:              cfg.AccessTokenTTL,
+		RefreshTTL:             cfg.RefreshTokenTTL,
 	})
 
 	realIP, err := middleware.NewRealIP(cfg.TrustedProxies)
@@ -125,6 +154,7 @@ func run() error {
 
 	handler, _ := httpapi.NewRouter(httpapi.Deps{
 		Svc:     svc,
+		LDAP:    dir,
 		Keys:    keys,
 		Logger:  logger,
 		Met:     met,
@@ -132,6 +162,7 @@ func run() error {
 		Cookie:  httpapi.CookieCfg{Secure: cfg.CookieSecure, Domain: cfg.CookieDomain, RefreshTTL: cfg.RefreshTokenTTL},
 		Docs:    cfg.DocsEnabled,
 		Version: version,
+		LogDir:  cfg.LogFileDir,
 	})
 
 	// --- Startup probes: fail fast (fail-closed, S-07) ---------------------

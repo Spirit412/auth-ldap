@@ -3,12 +3,14 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"aps.local/apps/api/internal/audit"
 	"aps.local/apps/api/internal/jwks"
@@ -58,6 +60,9 @@ type Directory interface {
 	Authenticate(username, password string) (*ldap.User, error)
 	UserByDN(dn string) (*ldap.User, error)
 	Ping() error
+	// SelfBindMode: no service account — refresh uses session-stored roles
+	// instead of re-reading the directory (AD binds AS the user only).
+	SelfBindMode() bool
 }
 
 // SessionStore is the refresh-session persistence capability.
@@ -98,6 +103,10 @@ type Options struct {
 	AccessTTL    time.Duration
 	RefreshTTL   time.Duration
 	Now          func() time.Time // overridable in tests
+
+	// Bootstrap local admin (see config comments). Empty user/password = disabled.
+	AdminBootstrapUser     string
+	AdminBootstrapPassword string
 }
 
 // Service orchestrates authentication flows.
@@ -138,12 +147,45 @@ func (s *Service) Login(ctx context.Context, username, password, ip, userAgent s
 	retry, ok, err := s.lim.AllowLogin(ctx, ip, username)
 	if err != nil {
 		s.met.LoginAttempts.WithLabelValues("error").Inc()
+		zerolog.Ctx(ctx).Error().Err(err).Str("scope", "limiter").Msg("login denied: rate limiter unavailable")
 		return nil, nil, ErrUnavailable() // fail-closed on Redis errors
 	}
 	if !ok {
 		s.met.LoginAttempts.WithLabelValues("rate_limited").Inc()
 		s.audit.RateLimited(ctx, username, ip, "login")
 		return nil, nil, ErrRateLimited(retry)
+	}
+
+	// Bootstrap local admin: compared against the password from config in
+	// constant time, bypassing LDAP. Intended for initial admin access
+	// before an AD admin group exists.
+	if s.opt.AdminBootstrapUser != "" && s.opt.AdminBootstrapPassword != "" &&
+		username == s.opt.AdminBootstrapUser {
+		if subtle.ConstantTimeCompare(
+			[]byte(s.opt.AdminBootstrapPassword), []byte(password)) == 1 {
+			user := &ldap.User{
+				Username:    username,
+				DisplayName: "Bootstrap admin",
+				Roles:       []string{"admin"},
+			}
+			if _, err := s.users.UpsertFromLogin(ctx, user); err != nil {
+				s.met.LoginAttempts.WithLabelValues("error").Inc()
+				zerolog.Ctx(ctx).Error().Err(err).Str("scope", "postgres").Msg("bootstrap login denied: profile upsert failed")
+				return nil, nil, ErrUnavailable()
+			}
+			tokens, claims, err := s.issue(ctx, user, ip, userAgent)
+			if err != nil {
+				s.met.LoginAttempts.WithLabelValues("error").Inc()
+				zerolog.Ctx(ctx).Error().Err(err).Str("scope", "session").Msg("bootstrap login denied: failed to issue tokens")
+				return nil, nil, ErrUnavailable()
+			}
+			s.met.LoginAttempts.WithLabelValues("success").Inc()
+			s.audit.Login(ctx, username, ip, userAgent, "success", claims.ID)
+			return tokens, claims, nil
+		}
+		s.met.LoginAttempts.WithLabelValues("invalid_credentials").Inc()
+		s.audit.Login(ctx, username, ip, userAgent, "invalid_credentials", "")
+		return nil, nil, ErrInvalidCredentials()
 	}
 
 	user, err := s.dir.Authenticate(username, password)
@@ -157,6 +199,7 @@ func (s *Service) Login(ctx context.Context, username, password, ip, userAgent s
 		default:
 			s.met.LoginAttempts.WithLabelValues("error").Inc()
 			s.audit.Login(ctx, username, ip, userAgent, "error", "")
+			zerolog.Ctx(ctx).Error().Err(err).Str("scope", "ldap").Msg("login denied: directory unavailable")
 			return nil, nil, ErrUnavailable()
 		}
 	}
@@ -166,6 +209,7 @@ func (s *Service) Login(ctx context.Context, username, password, ip, userAgent s
 	if _, err := s.users.UpsertFromLogin(ctx, user); err != nil {
 		s.met.LoginAttempts.WithLabelValues("error").Inc()
 		s.audit.Login(ctx, username, ip, userAgent, "error", "")
+		zerolog.Ctx(ctx).Error().Err(err).Str("scope", "postgres").Msg("login denied: profile upsert failed")
 		return nil, nil, ErrUnavailable()
 	}
 
@@ -173,6 +217,7 @@ func (s *Service) Login(ctx context.Context, username, password, ip, userAgent s
 	if err != nil {
 		s.met.LoginAttempts.WithLabelValues("error").Inc()
 		s.audit.Login(ctx, username, ip, userAgent, "error", "")
+		zerolog.Ctx(ctx).Error().Err(err).Str("scope", "session").Msg("login denied: failed to issue tokens")
 		return nil, nil, ErrUnavailable()
 	}
 	s.met.LoginAttempts.WithLabelValues("success").Inc()
@@ -267,7 +312,7 @@ func (s *Service) Refresh(ctx context.Context, rawRefresh, ip, userAgent string)
 	// next refresh, not just at the next login (S-12). Fail-closed: if the
 	// directory is unavailable we refuse to issue new tokens (S-07).
 	roles, name, email := fam.Roles, fam.DisplayName, fam.Email
-	if fam.DN != "" {
+	if fam.DN != "" && !s.dir.SelfBindMode() {
 		user, err := s.dir.UserByDN(fam.DN)
 		if err != nil {
 			if err == ldap.ErrInvalidCredentials {

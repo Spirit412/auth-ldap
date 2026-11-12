@@ -38,9 +38,14 @@ func TestMapRoles(t *testing.T) {
 // S-01: the filter template must contain exactly one value placeholder and
 // the escaping is provided by ldap.EscapeFilter; ensure the structure is
 // constant (no raw concatenation of user input outside the placeholder).
-func TestFilterTemplateStructure(t *testing.T) {
-	if filterTemplate != "(&(objectClass=person)(%s=%s))" {
-		t.Fatalf("filter template changed unexpectedly: %q", filterTemplate)
+func TestUserFilter(t *testing.T) {
+	c := &Client{cfg: Settings{ObjectClass: "", UserAttr: "sAMAccountName"}}
+	if got := c.userFilter("sAMAccountName", "doav"); got != "(sAMAccountName=doav)" {
+		t.Fatalf("empty class filter = %q", got)
+	}
+	c2 := &Client{cfg: Settings{ObjectClass: "person", UserAttr: "uid"}}
+	if got := c2.userFilter("uid", "ali*ce"); got != `(&(objectClass=person)(uid=ali\2ace))` {
+		t.Fatalf("class filter = %q (wildcards must be escaped, S-01)", got)
 	}
 }
 

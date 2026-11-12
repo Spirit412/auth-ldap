@@ -23,6 +23,16 @@ type Config struct {
 
 	LogLevel  string `env:"LOG_LEVEL" envDefault:"info"`  // debug|info|warn|error
 	LogFormat string `env:"LOG_FORMAT" envDefault:"json"` // json|console
+	// Bootstrap admin: a LOCAL account for accessing the admin panel when
+	// no AD admin group is configured yet. Password lives in .env (gitignored);
+	// comparison is constant-time (subtle).
+	AdminBootstrapUser     string `env:"APS_ADMIN_BOOTSTRAP_USER" envDefault:""`
+	AdminBootstrapPassword string `env:"APS_ADMIN_PASSWORD" envDefault:""`
+
+	// Admin state logs: daily files aps-YYYYMMDD.log, retention in days
+	// (older files are deleted by a background sweep, default 3).
+	LogFileDir       string `env:"LOG_FILE_DIR" envDefault:""` // empty = stderr only
+	LogRetentionDays int    `env:"LOG_RETENTION_DAYS" envDefault:"3"`
 
 	// --- LDAP (S-02: TLS mandatory) ---
 	// LDAPURL must be ldaps://host:636. ldap:// is allowed only when
@@ -35,6 +45,9 @@ type Config struct {
 	LDAPBindPassword     string `env:"LDAP_BIND_PASSWORD"`                   // or _FILE variant below
 	LDAPBindPasswordFile string `env:"LDAP_BIND_PASSWORD_FILE"`              // secret-file alternative
 	LDAPBaseDN           string `env:"LDAP_BASE_DN"`
+	// LDAPObjectClass: AD serves the full class chain (person matches);
+	// simple mock servers (glauth) only serve leaf classes — set inetOrgPerson.
+	LDAPObjectClass string `env:"LDAP_OBJECT_CLASS" envDefault:"person"`
 	// LDAPUserAttr is the login attribute. Default sAMAccountName (AD);
 	// mock glauth uses uid. The filter structure itself stays constant (S-01).
 	LDAPUserAttr string `env:"LDAP_USER_ATTR" envDefault:"sAMAccountName"`
@@ -43,11 +56,14 @@ type Config struct {
 	// LDAPUPNSuffix enables UPN logins: "user@<suffix>" is searched by
 	// userPrincipalName; other domains and "DOMAIN\user" are normalised to
 	// the short name. Empty disables UPN handling.
-	LDAPUPNSuffix    string        `env:"LDAP_UPN_SUFFIX" envDefault:""`
-	LDAPAdminGroupDN string        `env:"LDAP_ADMIN_GROUP_DN"` // S-12: maps to roles=["admin"]
-	LDAPPoolSize     int           `env:"LDAP_POOL_SIZE" envDefault:"5"`
-	LDAPTimeout      time.Duration `env:"LDAP_TIMEOUT" envDefault:"10s"`
-	LDAPRetry        int           `env:"LDAP_RETRY" envDefault:"3"` // transient dial retries
+	LDAPUPNSuffix string `env:"LDAP_UPN_SUFFIX" envDefault:""`
+	// LDAPNetBIOSDomain: self-bind mode builds "DOMAIN\user" bind names
+	// when the login is a bare sAMAccountName.
+	LDAPNetBIOSDomain string        `env:"LDAP_NETBIOS_DOMAIN" envDefault:""`
+	LDAPAdminGroupDN  string        `env:"LDAP_ADMIN_GROUP_DN"` // S-12: maps to roles=["admin"]
+	LDAPPoolSize      int           `env:"LDAP_POOL_SIZE" envDefault:"5"`
+	LDAPTimeout       time.Duration `env:"LDAP_TIMEOUT" envDefault:"10s"`
+	LDAPRetry         int           `env:"LDAP_RETRY" envDefault:"3"` // transient dial retries
 
 	// --- Redis (shared instance: every key gets the aps: prefix) ---
 	RedisAddr      string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
@@ -123,11 +139,10 @@ func (c *Config) Validate() error {
 	if c.LDAPURL == "" {
 		return fmt.Errorf("LDAP_URL is required")
 	}
-	if c.LDAPBindDN == "" || c.LDAPBaseDN == "" {
-		return fmt.Errorf("LDAP_BIND_DN and LDAP_BASE_DN are required")
-	}
-	if c.LDAPBindPassword == "" && c.LDAPBindPasswordFile == "" {
-		return fmt.Errorf("either LDAP_BIND_PASSWORD or LDAP_BIND_PASSWORD_FILE is required")
+	// BaseDN is always required; BIND_DN/PASSWORD may both be empty ->
+	// self-bind mode (AD binds AS the user, no service account needed).
+	if c.LDAPBaseDN == "" {
+		return fmt.Errorf("LDAP_BASE_DN is required")
 	}
 	if c.LDAPPoolSize < 1 {
 		c.LDAPPoolSize = 1

@@ -26,8 +26,10 @@ func NewLimiter(rdb redis.UniversalClient, keyPrefix string, login int, loginWin
 		keyPrefix = "aps:"
 	}
 	return &Limiter{
-		login:   redis_rate.Limit{Burst: login, Period: loginWin},
-		refresh: redis_rate.Limit{Burst: 10, Period: refreshWin},
+		// Rate = событий за Period; без него GCRA-скрипт получает деление
+		// на ноль и падает с "value is not an integer" (S-06).
+		login:   redis_rate.Limit{Burst: login, Rate: login, Period: loginWin},
+		refresh: redis_rate.Limit{Burst: 10, Rate: 10, Period: refreshWin},
 		gcra:    redis_rate.NewLimiter(rdb),
 		keyPfx:  keyPrefix,
 	}

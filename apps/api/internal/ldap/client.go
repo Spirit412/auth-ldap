@@ -51,26 +51,25 @@ type User struct {
 // Settings is the subset of app config needed here (kept local so this
 // package has no dependency on the config package).
 type Settings struct {
-	URL          string // ldaps://host:636
-	StartTLS     bool   // for ldap:// URLs
-	CAFile       string
-	InsecureTLS  bool
-	BindDN       string
-	BindPassword string
-	BaseDN       string
-	UserAttr     string
-	NameAttr     string
-	MailAttr     string
-	AdminGroupDN string
-	UPNSuffix    string // enables user@suffix -> userPrincipalName search
-	PoolSize     int
-	Timeout      time.Duration
-	Retry        int
+	URL           string // ldaps://host:636
+	StartTLS      bool   // for ldap:// URLs
+	CAFile        string
+	InsecureTLS   bool
+	BindDN        string
+	BindPassword  string
+	BaseDN        string
+	ObjectClass   string // AD: person; simple mocks: inetOrgPerson
+	NetBIOSDomain string // self-bind: DOMAIN\user bind name
+	SelfBind      bool   // no service account: bind AS the user
+	UserAttr      string
+	NameAttr      string
+	MailAttr      string
+	AdminGroupDN  string
+	UPNSuffix     string // enables user@suffix -> userPrincipalName search
+	PoolSize      int
+	Timeout       time.Duration
+	Retry         int
 }
-
-// filterTemplate is the ONLY way user input reaches an LDAP filter:
-// a constant structure with a single placeholder for the escaped value (S-01).
-const filterTemplate = "(&(objectClass=person)(%s=%s))"
 
 // dummyBindDN is a syntactically valid but never-existing DN used to burn
 // one bind attempt on the "unknown user" path (S-08 timing alignment).
@@ -112,6 +111,9 @@ func New(cfg Settings) (*Client, error) {
 			return nil, fmt.Errorf("LDAP_CA_CERT_FILE contains no usable certificates")
 		}
 		tlsConf.RootCAs = pool
+	}
+	if cfg.BindDN == "" || cfg.BindPassword == "" {
+		cfg.SelfBind = true
 	}
 	return &Client{
 		cfg:     cfg,
@@ -224,23 +226,61 @@ func (c *Client) normalizeLogin(input string) (attr, value string) {
 	return c.cfg.UserAttr, s
 }
 
+// bindName converts the normalized login into the string handed to AD as
+// the bind identity in self-bind mode. AD accepts NT4 names ("unicont\doav")
+// and UPNs ("doav@unicont.spb"); a bare sAMAccountName is passed through.
+func (c *Client) bindName(login string) string {
+	if strings.Contains(login, "@") {
+		return login // UPN already (normalizeLogin kept it)
+	}
+	if c.cfg.UPNSuffix != "" {
+		// Verified on s0005.unicont.spb: UPN bind succeeds while
+		// "DOMAIN\doav" returns invalidCredentials.
+		return login + "@" + c.cfg.UPNSuffix
+	}
+	if c.cfg.NetBIOSDomain != "" {
+		return c.cfg.NetBIOSDomain + "\\" + login
+	}
+	return login
+}
+
 // Authenticate verifies username/password against the directory and returns
-// the user with mapped roles. Error paths:
-//   - user not found  -> dummy bind (S-08) -> ErrInvalidCredentials
-//   - wrong password  -> ErrInvalidCredentials (identical response upstream)
-//   - infra failure   -> ErrUnavailable (503, S-07)
+// the user with mapped roles.
+//
+// Service-account mode (LDAP_BIND_DN set): search as the service account,
+// then verify the password with a dedicated bind AS the user. Unknown user
+// triggers a dummy bind first (S-08 timing alignment).
+//
+// Self-bind mode (no service account): the password check IS the first
+// operation — bind AS "DOMAIN\user" / UPN on a fresh TLS connection — so
+// unknown-user and wrong-password naturally cost the same single failed
+// bind (S-08). On success the same connection searches the user's own
+// attributes (AD permits self-read of displayName/mail/memberOf).
+//
+// Error paths: wrong password / no such user -> ErrInvalidCredentials
+// (identical upstream, S-08); infra failure -> ErrUnavailable (503, S-07).
 func (c *Client) Authenticate(username, password string) (*User, error) {
 	if strings.TrimSpace(username) == "" || password == "" {
 		return nil, ErrInvalidCredentials
 	}
 
-	// 1. Search by the configured login attribute, value escaped (S-01).
 	attr, login := c.normalizeLogin(username)
+
+	if c.cfg.SelfBind {
+		return c.authenticateSelfBind(attr, login, password)
+	}
+	return c.authenticateServiceBind(attr, login, password)
+}
+
+// authenticateServiceBind is the classic flow with a read-only service
+// account (S-03): search first, then user bind, then map roles.
+func (c *Client) authenticateServiceBind(attr, login, password string) (*User, error) {
+	// 1. Search by the configured login attribute, value escaped (S-01).
 	conn, err := c.acquire()
 	if err != nil {
 		return nil, mapConnErr(err)
 	}
-	filter := fmt.Sprintf(filterTemplate, attr, ldap.EscapeFilter(login))
+	filter := c.userFilter(attr, login)
 	req := ldap.NewSearchRequest(
 		c.cfg.BaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 0, false,
@@ -269,12 +309,55 @@ func (c *Client) Authenticate(username, password string) (*User, error) {
 	entry := res.Entries[0]
 
 	// 2. Verify the password with a dedicated bind AS the user. The user
-	//    password is used for nothing else (never stored, never logged, S-09).
+	// password is used for nothing else (never stored, never logged, S-09).
 	if err := c.userBind(entry.DN, password); err != nil {
 		return nil, err
 	}
 
-	// 3. Map group membership to roles (S-12).
+	return c.toUser(entry)
+}
+
+// authenticateSelfBind verifies the password by binding AS the user, then
+// reads own attributes on the same connection (no service account needed).
+func (c *Client) authenticateSelfBind(attr, login, password string) (*User, error) {
+	conn, err := c.dial()
+	if err != nil {
+		return nil, mapConnErr(err)
+	}
+	defer conn.Close()
+
+	if err := conn.Bind(c.bindName(login), password); err != nil {
+		// Unknown user and wrong password are the same single failed bind —
+		// both map to the identical upstream 401 (S-08).
+		if mapped := mapConnErr(err); errors.Is(mapped, ErrUnavailable) {
+			return nil, mapped
+		}
+		return nil, ErrInvalidCredentials
+	}
+
+	// Bound as the user: read own attributes. Escaped filter (S-01).
+	filter := c.userFilter(attr, login)
+	req := ldap.NewSearchRequest(
+		c.cfg.BaseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 0, false,
+		filter,
+		[]string{"dn", c.cfg.UserAttr, c.cfg.NameAttr, c.cfg.MailAttr, "memberOf"},
+		nil,
+	)
+	res, err := conn.Search(req)
+	if err != nil {
+		return nil, mapConnErr(err)
+	}
+	if len(res.Entries) != 1 {
+		// Bound fine but the entry is not findable/readable — fail closed
+		// without revealing which half failed.
+		return nil, ErrInvalidCredentials
+	}
+	return c.toUser(res.Entries[0])
+}
+
+// toUser maps an LDAP entry into the domain User with roles (S-12).
+func (c *Client) toUser(entry *ldap.Entry) (*User, error) {
 	user := &User{
 		DN:          entry.DN,
 		Username:    firstAttr(entry, c.cfg.UserAttr),
@@ -283,13 +366,16 @@ func (c *Client) Authenticate(username, password string) (*User, error) {
 		MemberOf:    entry.GetAttributeValues("memberOf"),
 	}
 	if user.Username == "" {
-		// fall back to cn-like value from DN is deliberately NOT done:
-		// if the login attribute is missing, fail closed.
+		// if the login attribute is missing on the entry, fail closed.
 		return nil, ErrAmbiguousUser
 	}
 	user.Roles = mapRoles(user.MemberOf, c.cfg.AdminGroupDN)
 	return user, nil
 }
+
+// SelfBindMode reports whether the client operates without a service
+// account; the auth service skips refresh-time LDAP re-reads in that mode.
+func (c *Client) SelfBindMode() bool { return c.cfg.SelfBind }
 
 // userBind opens a fresh connection and binds as the user.
 func (c *Client) userBind(dn, password string) error {
@@ -324,6 +410,11 @@ func (c *Client) dummyBind(password string) {
 // UserByDN reads a user entry by DN. Used on refresh to re-check role
 // membership (S-12) without a password bind.
 func (c *Client) UserByDN(dn string) (*User, error) {
+	if c.cfg.SelfBind {
+		// No service identity: role re-read at refresh is unavailable;
+		// the auth service must use roles stored in the session instead.
+		return nil, ErrUnavailable
+	}
 	if dn == "" {
 		return nil, ErrInvalidCredentials
 	}
@@ -357,8 +448,18 @@ func (c *Client) UserByDN(dn string) (*User, error) {
 	return u, nil
 }
 
-// Ping performs a cheap base-object search; used by /ready (S-07).
+// Ping performs a cheap directory availability check; used by /ready (S-07).
+// Self-bind mode has no service credentials: a successful TLS handshake is
+// the strongest check available without user credentials.
 func (c *Client) Ping() error {
+	if c.cfg.SelfBind {
+		conn, err := c.dial()
+		if err != nil {
+			return mapConnErr(err)
+		}
+		conn.Close()
+		return nil
+	}
 	conn, err := c.acquire()
 	if err != nil {
 		return mapConnErr(err)

@@ -50,6 +50,8 @@ func (f *fakeDirectory) UserByDN(dn string) (*ldap.User, error) {
 
 func (f *fakeDirectory) Ping() error { return nil }
 
+func (f *fakeDirectory) SelfBindMode() bool { return false }
+
 type fakeLimiter struct {
 	denyLogin   bool
 	denyRefresh bool

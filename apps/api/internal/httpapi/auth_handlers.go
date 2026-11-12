@@ -138,7 +138,9 @@ type refreshRequest struct {
 type RefreshInput struct {
 	Cookie         string `header:"Cookie" doc:"aps_refresh cookie (browser clients)"`
 	XRequestedWith string `header:"X-Requested-With" doc:"required when the cookie is used"`
-	Body           refreshRequest
+	// Body is optional: browser clients refresh via the HttpOnly cookie and
+	// send an empty POST body.
+	Body *refreshRequest
 }
 
 type RefreshOutput struct {
@@ -201,7 +203,10 @@ func registerAuth(api huma.API, d Deps) {
 		if err := antiCSRFCookieGuard(in.Cookie, in.XRequestedWith); err != nil {
 			return nil, fail(ctx, err)
 		}
-		raw := in.Body.RefreshToken
+		raw := ""
+		if in.Body != nil {
+			raw = in.Body.RefreshToken
+		}
 		if raw == "" {
 			raw = cookieValue(in.Cookie, refreshCookieName)
 		}

@@ -1,5 +1,5 @@
 import { Layout, Menu, Button, Tag, Space, Typography, App as AntApp } from 'antd';
-import { LogoutOutlined, DashboardOutlined, TeamOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { LogoutOutlined, DashboardOutlined, TeamOutlined, FileTextOutlined, SafetyCertificateOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useAuthStore, isAdmin } from '../stores/auth';
 import { useUiStore } from '../stores/ui';
@@ -34,7 +34,11 @@ export function ProtectedLayout() {
           items={[
             { key: '/', icon: <DashboardOutlined />, label: 'Дашборд', onClick: () => void navigate({ to: '/' }) },
             ...(isAdmin(useAuthStore.getState())
-              ? [{ key: '/users', icon: <TeamOutlined />, label: 'Пользователи', onClick: () => void navigate({ to: '/users' }) }]
+              ? [
+                  { key: '/users', icon: <TeamOutlined />, label: 'Пользователи', onClick: () => void navigate({ to: '/users' }) },
+                  { key: '/logs', icon: <FileTextOutlined />, label: 'Логи', onClick: () => void navigate({ to: '/logs' }) },
+                  { key: '/ldap', icon: <SafetyCertificateOutlined />, label: 'LDAP', onClick: () => void navigate({ to: '/ldap' }) },
+                ]
               : []),
           ]}
         />
